@@ -11,9 +11,9 @@ namespace taoxml {
         close3,         // </xxx>, parent closing
         space,          // space
         text,           // text
-        ident,          // identifier
+        attr,          // attribute name
         assign,         // =
-        value,          // "xxx"
+        value,          // "xxx", attribute value
     };
 
     enum class read_type {
@@ -55,7 +55,7 @@ namespace taoxml {
             if(tk == token::open) {
                 std::cout << *this << "<" << _tk;
 
-                while(((int)(tk = _token(true)) || 1) && (tk == token::ident || tk == token::space)) {
+                while(((int)(tk = _token(true)) || 1) && (tk == token::attr || tk == token::space)) {
                     if(tk == token::space)
                         continue;
 
@@ -115,7 +115,7 @@ namespace taoxml {
                 else if(_is_alnum()) {
                     if (!_read_token(read_type::tk))
                         return token::error;
-                    return token::ident;
+                    return token::attr;
                 }
                 else if(*_p == '=') {
                     ++_p;
@@ -124,8 +124,15 @@ namespace taoxml {
                 else if(*_p == '\'' || *_p == '"') {
                     char c = *_p++;
                     _tk = "";
-                    while(*_p && *_p != c)
-                        _tk += *_p++;
+                    while(*_p && *_p != c) {
+                        if(*_p == '&') {
+                            if(!_read_entity())
+                                return token::error;
+                        }
+                        else {
+                            _tk += *_p++;
+                        }
+                    }
 
                     if(*_p != c)
                         return token::error;
@@ -181,6 +188,42 @@ namespace taoxml {
         }
 
     protected:  // aux, called by protected
+
+        // support only `&nbsp;`, `&quot;(&#34;)`, `&apos;(&#39;)`, `&lt;`, `&gt;`, `&amp;`
+        bool _read_entity() {
+            static struct entities_t {
+                const char* name;
+                const char* got;
+            } entities[] = {
+                {"nbsp", " "},
+                {"quot", "\""}, {"#34", "\""},
+                {"apos", "'"}, {"#39", "'"},
+                {"lt", "<"},
+                {"gt", ">"},
+                {"amp", "&"},
+            };
+
+            if(*_p != '&') return false;
+
+            for(int i = 0, n = sizeof(entities) / sizeof(entities[0]); i < n; i++) {
+                auto name = entities[i].name;
+                auto len = strlen(name);
+                if(_p[1] == name[0] && strncmp(&_p[1], name, len) == 0) {
+                    if(_p[len + 1] == ';') {
+                        _tk += entities[i].got;
+                        _p += len + 1 + 1;
+                        return true;
+                    }
+                }
+            }
+
+            // ignores unrecognized entity
+            _tk += '&';
+            ++_p;
+            return true;
+        }
+
+        // tokens are: text node, identifier, white spaces
         int _read_token(read_type type) {
             int n = 0;
             _tk = "";
@@ -195,8 +238,15 @@ namespace taoxml {
             }
 
             while ((this->*func)()) {
-                _tk += *_p++;
-                ++n;
+                if(*_p == '&') {
+                    if(!_read_entity())
+                        return 0;
+                    ++n;
+                }
+                else {
+                    _tk += *_p++;
+                    ++n;
+                }
             }
 
             return n;
@@ -205,6 +255,10 @@ namespace taoxml {
         inline bool _valid_ptr(bool inc = false) {
             if(inc) ++_p;
             return !!*_p;
+        }
+
+        inline bool _valid_offset(int offset) {
+            return !!_p[offset];
         }
 
         inline bool _is_alnum() {
@@ -244,9 +298,9 @@ namespace taoxml {
         }
 
     protected:  // vars
-        const char*     _xml;
-        const char*     _p;
-        std::string     _tk;
+        const char*     _xml;       // raw xml string
+        const char*     _p;         // current pointer to content
+        std::string     _tk;        // current token
         int             _line;      // current line number
         int             _char;      // current char position
         int             _indent;    // indent spaces
@@ -264,8 +318,8 @@ int main() {
     <body>
         <div />
         <img id="abc"/>
-        <div class="content">
-            <span>text</span>
+        <div class="content" data="1 &lt;&lt; 20">
+            <span>a &lt; b &gt; c &amp; d &unknown e &#34; f &apos;</span>
         </div>
     </body>
 </html>
