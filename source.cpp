@@ -1,5 +1,7 @@
 #include <iostream>
 #include <string>
+#include <vector>
+#include <map>
 
 namespace taoxml {
     enum class token {
@@ -11,7 +13,7 @@ namespace taoxml {
         close3,         // </xxx>, parent closing
         space,          // space
         text,           // text
-        attr,          // attribute name
+        attr,           // attribute name
         assign,         // =
         value,          // "xxx", attribute value
     };
@@ -22,10 +24,188 @@ namespace taoxml {
         tk,
     };
 
+    enum class node_type {
+        node,
+        text,
+    };
+
+    class node_node_t;
+    class text_node_t;
+
+    class node_base_t {
+    public:
+        node_type type() const {
+            return _type;
+        }
+
+        virtual node_node_t* to_node() = 0;
+        virtual text_node_t* to_text() = 0;
+
+    protected:
+        node_base_t(node_type type)
+            : _type(type)
+        {}
+
+    protected:
+        node_type _type;
+    };
+
+    class node_node_t : public node_base_t {
+        typedef std::vector<node_base_t*>           children_t;
+        typedef std::map<std::string, std::string>  attr_t;
+
+    public:
+        node_node_t()
+            : node_base_t(node_type::node)
+            , _parent(nullptr)
+            , _prev(nullptr)
+            , _next(nullptr)
+            , _cindex(-1)
+        {}
+
+        virtual node_node_t* to_node() override {
+            return this;
+        }
+
+        virtual text_node_t* to_text() override {
+            return nullptr;
+        }
+
+    public:
+        void set_tag(const std::string& tag) {
+            _tag = tag;
+        }
+
+        const std::string& tag() const {
+            return _tag;
+        }
+
+        void add_attr(const std::string& key, const std::string& val) {
+            _attrs[key] = val;
+        }
+
+        void add_child(node_base_t* node) {
+            _children.push_back(node);
+        }
+
+    public:
+        node_node_t*    parent() const {
+            return _parent;
+        }
+
+        node_base_t*    big() const {
+            return _prev;
+        }
+
+        node_base_t*    little() const{
+            return _next;
+        }
+
+        size_t size() const {
+            return _children.size();
+        }
+
+        node_base_t* operator[](int i) {
+            return _children[i];
+        }
+
+        void select(const char* tag) {
+            _search = tag;
+            _cindex = -1;
+        }
+
+        node_base_t* next() {
+            for (int i = _cindex+1, n = (int)_children.size(); i < n; i++) {
+                if (_children[i]->type() == node_type::node && (!_search.size() || _children[i]->to_node()->tag() == _search)) {
+                    return _children[i];
+                }
+            }
+
+            return nullptr;
+        }
+
+        node_base_t* prev() {
+            for (int i = _cindex - 1, n = (int)_children.size(); i >= 0; i--) {
+                if (_children[i]->type() == node_type::node && (!_search.size() || _children[i]->to_node()->tag() == _search)) {
+                    return _children[i];
+                }
+            }
+
+            return nullptr;
+        }
+
+    protected:
+        node_base_t*    _prev;
+        node_base_t*    _next;
+        node_node_t*    _parent;
+        children_t      _children;
+        int             _cindex;
+        attr_t          _attrs;
+        std::string     _tag;
+        std::string     _search;
+    };
+
+    class text_node_t : public node_base_t {
+    public:
+        text_node_t()
+            : node_base_t(node_type::text)
+        {}
+
+        virtual node_node_t* to_node() override {
+            return nullptr;
+        }
+
+        virtual text_node_t* to_text() override {
+            return this;
+        }
+
+        void set_value(const std::string& val) {
+            _value = val;
+        }
+
+        const std::string&  value() const {
+            return _value;
+        }
+
+    protected:
+        std::string     _value;
+    };
+
+    class find_node_t {
+    public:
+        find_node_t(node_base_t* node)
+            : _base(node)
+        {}
+
+        find_node_t operator[](const char* tag) {
+            if (_base && _base->type() == node_type::node) {
+                _base->to_node()->select(tag);
+                return _base->to_node()->next();
+            }
+
+            return nullptr;
+        }
+
+        node_node_t*    to_node() const {
+            return _base ? _base->to_node() : nullptr;
+        }
+
+        text_node_t*    to_text() const {
+            return _base ? _base->to_text() : nullptr;
+        }
+
+    protected:
+        node_base_t*    _base;
+    };
+
     class taoxml_t {
     public:
         taoxml_t() {}
         ~taoxml_t() {}
+
+        node_node_t* root() {
+            return &_root;
+        }
 
         bool parse(const char* xml) {
             _xml = xml;
@@ -35,16 +215,18 @@ namespace taoxml {
             _indent = 0;
 
             token tk;
+            node_base_t* node = nullptr;
 
-            while(((int)(tk = _parse_node()) || 1) && (tk == token::close || tk == token::close2)) {
-                std::cout << "noding ...\n";
+            while(((int)(tk = _parse_node(&node)) || 1) && (tk == token::close || tk == token::close2)) {
+                if(node)
+                    _root.add_child(node);
             }
 
             return true;
         }
 
     protected:  // called by public
-        token _parse_node() {
+        token _parse_node(node_base_t** node) {
             token tk;
 
             tk = _token(false);
@@ -53,13 +235,15 @@ namespace taoxml {
                 return token::close3;
 
             if(tk == token::open) {
-                std::cout << *this << "<" << _tk;
+                node_node_t* newnode = new node_node_t;
+
+                newnode->set_tag(_tk);
 
                 while(((int)(tk = _token(true)) || 1) && (tk == token::attr || tk == token::space)) {
                     if(tk == token::space)
                         continue;
 
-                    std::cout << " " << _tk;
+                    std::string key(_tk);
 
                     tk = _token(true);
                     if(tk == token::space)
@@ -67,38 +251,41 @@ namespace taoxml {
                     if(tk != token::assign)
                         return token::error;
 
-                    std::cout << "=";
-
                     tk = _token(true);
                     if(tk == token::space)
                         tk = _token(true);
                     if(tk != token::value)
                         return token::error;
 
-                    std::cout << "\"" << _tk << "\"";
+                    newnode->add_attr(key, _tk);
                 }
 
                 if(tk == token::close2) {
-                    std::cout << " />\n";
-                    return tk;
+                    *node = newnode;
+                    return token::close2;
                 }
                 else if(tk == token::open2) {
-                    std::cout << ">\n";
-
-                    _indent += 4;
-                    while(((int)(tk = _parse_node()) || 1) && tk != token::close3 && tk != token::error)
-                        ;
-                    _indent -= 4;
+                    node_base_t* cnode = nullptr;
+                    while (((int)(tk = _parse_node(&cnode)) || 1) && tk != token::close3 && tk != token::error)
+                        if(cnode)
+                            newnode->add_child(cnode);
 
                     if(tk == token::close3) {
-                        std::cout << *this << "</" << _tk << ">\n";
+                        *node = newnode;
                         return token::close;
                     }
                 }
             }
             else if(tk == token::text) { // text
-                if(!_is_empty())
-                    std::cout << *this << _tk << "\n";
+                if (!_is_empty()) {
+                    text_node_t* newnode = new text_node_t;
+                    newnode->set_value(_tk);
+                    *node = newnode;
+                }
+                else {
+                    *node = nullptr;
+                }
+                    
                 return token::close2;
             }
 
@@ -292,12 +479,8 @@ namespace taoxml {
             return *p == '\0';
         }
 
-        friend std::ostream& operator<<(std::ostream& os, const taoxml_t& tx) {
-            os << std::string(tx._indent, ' ');
-            return os;
-        }
-
     protected:  // vars
+        node_node_t     _root;      // root node
         const char*     _xml;       // raw xml string
         const char*     _p;         // current pointer to content
         std::string     _tk;        // current token
@@ -315,8 +498,8 @@ int main() {
         <meta charset="UTF-8" />
         <style type="text/css"></style>
     </head>
+    <div />
     <body>
-        <div />
         <img id="abc"/>
         <div class="content" data="1 &lt;&lt; 20">
             <span>a &lt; b &gt; c &amp; d &unknown e &#34; f &apos;</span>
@@ -326,7 +509,10 @@ int main() {
 )";
 
     taoxml::taoxml_t tx;
-    tx.parse(xml);
+    if (tx.parse(xml)) {
+        taoxml::text_node_t* span = taoxml::find_node_t(tx.root())["html"]["body"]["div"]["span"].to_text();
+        int i = 0;
+    }
 
     return 0;
 }
