@@ -84,6 +84,26 @@ namespace taoxml {
             _attrs[key] = val;
         }
 
+        size_t size_attr() const {
+            return _attrs.size();
+        }
+
+        attr_t::const_iterator attr(int i) const {
+            std::string t;
+            if(0 <= i && i < (int)size_attr()) {
+                int x = 0;
+                auto ai = _attrs.cbegin();
+                for(;  x < i;) {
+                    ai = ai++;
+                    x++;
+                }
+
+                return ai;
+            }
+
+            return _attrs.cend();
+        }
+
         void add_child(node_base_t* node) {
             _children.push_back(node);
         }
@@ -109,14 +129,20 @@ namespace taoxml {
             return _children[i];
         }
 
-        void select(const char* tag) {
+        node_node_t& select(const char* tag) {
             _search = tag;
             _cindex = -1;
+
+            return *this;
         }
 
         node_base_t* next() {
             for (int i = _cindex+1, n = (int)_children.size(); i < n; i++) {
-                if (_children[i]->type() == node_type::node && (!_search.size() || _children[i]->to_node()->tag() == _search)) {
+                if (!_search.size() // search for next text node
+                    || _children[i]->type() == node_type::node && _children[i]->to_node()->tag() == _search // search for next tagged node
+                    )
+                {
+                    _cindex = i;
                     return _children[i];
                 }
             }
@@ -126,7 +152,11 @@ namespace taoxml {
 
         node_base_t* prev() {
             for (int i = _cindex - 1, n = (int)_children.size(); i >= 0; i--) {
-                if (_children[i]->type() == node_type::node && (!_search.size() || _children[i]->to_node()->tag() == _search)) {
+                if (!_search.size() // search for next text node
+                    || _children[i]->type() == node_type::node && _children[i]->to_node()->tag() == _search // search for next tagged node
+                    )
+                {
+                    _cindex = i;
                     return _children[i];
                 }
             }
@@ -179,19 +209,26 @@ namespace taoxml {
 
         find_node_t operator[](const char* tag) {
             if (_base && _base->type() == node_type::node) {
-                _base->to_node()->select(tag);
-                return _base->to_node()->next();
+                return _base->to_node()->select(tag).next();
             }
 
             return nullptr;
         }
 
+        // convert to node_node_t
         node_node_t*    to_node() const {
             return _base ? _base->to_node() : nullptr;
         }
 
+        // tagged nodes are always node_node_t, so this function is used to
+        // convert the node's first node to text_node_t
         text_node_t*    to_text() const {
-            return _base ? _base->to_text() : nullptr;
+            if(_base && _base->to_node()) {
+                auto next = _base->to_node()->select("").next();
+                if(next) return next->to_text();
+            }
+
+            return nullptr;
         }
 
     protected:
@@ -212,13 +249,13 @@ namespace taoxml {
             _p = _xml;
             _line = 0;
             _char = 0;
-            _indent = 0;
 
             token tk;
             node_base_t* node = nullptr;
 
             while(((int)(tk = _parse_node(&node)) || 1) && (tk == token::close || tk == token::close2)) {
-                if(node)
+                // text nodes are not allowed on root
+                if(node && node->type() == node_type::node)
                     _root.add_child(node);
             }
 
@@ -486,19 +523,63 @@ namespace taoxml {
         std::string     _tk;        // current token
         int             _line;      // current line number
         int             _char;      // current char position
-        int             _indent;    // indent spaces
     };
+}
+
+std::ostream& operator <<(std::ostream& os, taoxml::text_node_t& text) {
+    os << "<![CDATA[" << text.value() << "]]>\n";
+    return os;
+}
+
+std::ostream& operator <<(std::ostream& os, taoxml::node_node_t& node) {
+    // print open tag
+    os << '<' << node.tag();
+
+    // print tag attrs
+    if(node.size_attr()) {
+        for(int i = 0; i < (int)node.size_attr(); i++) {
+            auto ai = node.attr(i);
+            std::cout << ' ' << ai->first << "=\"" << ai->second << "\"";
+        }
+    }
+
+    // if has children
+    if(node.size()) {
+        // print close open tag
+        os << ">\n";
+        
+        // recursively print children
+        node.select("");
+        while(auto next = node.next()) {
+            if(next->type() == taoxml::node_type::node)
+                os << *next->to_node();
+            else if(next->type() == taoxml::node_type::text)
+                os << *next->to_text();
+        }
+
+        // print closing tag
+        os << "</" << node.tag() << ">\n";
+    }
+    else {
+        os << "/>\n";
+    }
+
+    return os;
+}
+
+void dump_node_tree(taoxml::node_node_t* node) {
+    if(!node) return;
+
+    std::cout << *node;
 }
 
 int main() {
     const char* xml = R"(
 <html>
-    <h2>title<a></a></h2>
     <head>
         <meta charset="UTF-8" />
         <style type="text/css"></style>
     </head>
-    <div />
     <body>
         <img id="abc"/>
         <div class="content" data="1 &lt;&lt; 20">
@@ -509,10 +590,9 @@ int main() {
 )";
 
     taoxml::taoxml_t tx;
-    if (tx.parse(xml)) {
-        taoxml::text_node_t* span = taoxml::find_node_t(tx.root())["html"]["body"]["div"]["span"].to_text();
-        int i = 0;
-    }
+    tx.parse(xml);
+    taoxml::text_node_t* span = taoxml::find_node_t(tx.root())["html"]["body"]["div"]["span"].to_text();
+    dump_node_tree(tx.root()->select("").next()->to_node());
 
     return 0;
 }
