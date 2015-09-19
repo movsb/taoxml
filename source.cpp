@@ -18,20 +18,29 @@ namespace taoxml {
         value,          // "xxx", attribute value
     };
 
+    // 读取字段的类型
     enum class read_type {
-        text,
-        ws,
-        tk,
+        text,       // 文本
+        ws,         // 空白
+        tk,         // 上下文相关的词法单元（token）
     };
 
+    // 节点类型
     enum class node_type {
-        node,
-        text,
+        node,       // 普通节点
+        text,       // 文本节点
+    };
+
+    // start condition type
+    enum class start_condition {
+        initial,        // 无上下文环境
+        in_tag,         // 处于开标签中，将要解析属性对
     };
 
     class node_node_t;
     class text_node_t;
 
+    // 所有节点的基类
     class node_base_t {
     public:
         node_type type() const {
@@ -207,12 +216,23 @@ namespace taoxml {
             : _base(node)
         {}
 
+        // 通过 tag 名 查找元素
         find_node_t operator[](const char* tag) {
             if (_base && _base->type() == node_type::node) {
                 return _base->to_node()->select(tag).next();
             }
 
             return nullptr;
+        }
+
+        // 布尔表达式
+        operator bool() {
+            return !!_base;
+        }
+
+        // 自动转换成 node_node_t*
+        operator node_node_t*() {
+            return to_node();
         }
 
         // convert to node_node_t
@@ -266,7 +286,7 @@ namespace taoxml {
         token _parse_node(node_base_t** node) {
             token tk;
 
-            tk = _token(false);
+            tk = _token(start_condition::initial);
 
             if(tk == token::close)
                 return token::close3;
@@ -276,21 +296,21 @@ namespace taoxml {
 
                 newnode->set_tag(_tk);
 
-                while(((int)(tk = _token(true)) || 1) && (tk == token::attr || tk == token::space)) {
+                while(((int)(tk = _token(start_condition::in_tag)) || 1) && (tk == token::attr || tk == token::space)) {
                     if(tk == token::space)
                         continue;
 
                     std::string key(_tk);
 
-                    tk = _token(true);
+                    tk = _token(start_condition::in_tag);
                     if(tk == token::space)
-                        tk = _token(true);
+                        tk = _token(start_condition::in_tag);
                     if(tk != token::assign)
                         return token::error;
 
-                    tk = _token(true);
+                    tk = _token(start_condition::in_tag);
                     if(tk == token::space)
-                        tk = _token(true);
+                        tk = _token(start_condition::in_tag);
                     if(tk != token::value)
                         return token::error;
 
@@ -329,22 +349,59 @@ namespace taoxml {
             return token::error;
         }
 
-        token _token(bool intag) {
-            if(intag) {
+        token _token(start_condition cond) {
+            // 没有开始条件，即当前不处在任何上下文环境中
+            // 此环境下，不是节点就是文本
+            if(cond == start_condition::initial) {
+                if(*_p == '<') { // 开始新元素
+                    if(!_valid_ptr(true))
+                        return token::error;
+
+                    if(_is_alnum()) { // 开始新节点
+                        if(!_read_token(read_type::tk))
+                            return token::error;
+                        return token::open;
+                    } else if(*_p == '/') { // 正常关闭标签
+                        if(!_valid_ptr(true))
+                            return token::error;
+
+                        if(!_read_token(read_type::tk))
+                            return token::error;
+
+                        if(!_valid_ptr())
+                            return token::error;
+
+                        if(*_p++ != '>')
+                            return token::error;
+
+                        return token::close;
+                    }
+                } else if(_is_text()) { // 文本元素
+                    if(!_read_token(read_type::text))
+                        return token::error;
+                    return token::text;
+                }
+            }
+            // 开始条件是｛处于标签内｝，即开始属性解析
+            else if(cond == start_condition::in_tag) {
+                // 空白在属性之间属于忽略字段
                 if(_is_ws()) {
                     if(!_read_token(read_type::ws))
                         return token::error;
                     return token::space;
                 }
+                // 属性名
                 else if(_is_alnum()) {
                     if (!_read_token(read_type::tk))
                         return token::error;
                     return token::attr;
                 }
+                // 赋值符号
                 else if(*_p == '=') {
-                    ++_p;
+                    ++_p; 
                     return token::assign;
                 }
+                // 属性值（处于引号内，单双引号均可，需配对）
                 else if(*_p == '\'' || *_p == '"') {
                     char c = *_p++;
                     _tk = "";
@@ -365,46 +422,18 @@ namespace taoxml {
 
                     return token::value;
                 }
+                // 自关闭标签
                 else if(*_p == '/') { // close2 
                     if(*++_p != '>')
                         return token::error;
                     ++_p;
                     return token::close2;
                 }
+                // 关闭开标签
                 else if(*_p == '>') {
                     ++_p;
                     
                     return token::open2;
-                }
-            }
-            else {
-                if(*_p == '<') { // open, close, comment
-                    if(!_valid_ptr(true))
-                        return token::error;
-
-                    if(_is_alnum()) { // open
-                        if(!_read_token(read_type::tk))
-                            return token::error;
-                        return token::open;
-                    } else if(*_p == '/') { // close
-                        if(!_valid_ptr(true))
-                            return token::error;
-
-                        if(!_read_token(read_type::tk))
-                            return token::error;
-
-                        if(!_valid_ptr())
-                            return token::error;
-
-                        if(*_p++ != '>')
-                            return token::error;
-
-                        return token::close;
-                    }
-                } else if(_is_text()) {
-                    if(!_read_token(read_type::text))
-                        return token::error;
-                    return token::text;
                 }
             }
 
@@ -413,6 +442,8 @@ namespace taoxml {
 
     protected:  // aux, called by protected
 
+        // 实体标签解析
+        // 仅支持如下几个常用实体标签的解析，其它未支持的标签全部保留不变
         // support only `&nbsp;`, `&quot;(&#34;)`, `&apos;(&#39;)`, `&lt;`, `&gt;`, `&amp;`
         bool _read_entity() {
             static struct entities_t {
@@ -441,12 +472,14 @@ namespace taoxml {
                 }
             }
 
+            // 未被识别的标签也返回true，但不吃掉任何字符
             // ignores unrecognized entity
             _tk += '&';
             ++_p;
             return true;
         }
 
+        // 根据类型 type 读取一个字段
         // tokens are: text node, identifier, white spaces
         int _read_token(read_type type) {
             int n = 0;
@@ -485,6 +518,7 @@ namespace taoxml {
             return !!_p[offset];
         }
 
+        // 是否数字、字母
         inline bool _is_alnum() {
             return 0
                 || *_p >= 'a' && *_p <= 'z'
@@ -492,6 +526,8 @@ namespace taoxml {
                 || *_p >= '0' && *_p <= '9'
                 ;
         }
+
+        // 是否文本（主要区别于结束符与标签开闭）
         inline bool _is_text() {
             return *_p != '\0'
                 && *_p != '<'
@@ -499,6 +535,7 @@ namespace taoxml {
                 ;
         }
 
+        // 是否是空白字符
         inline bool _is_ws() {
             return 0
                 || *_p == ' '
@@ -508,6 +545,7 @@ namespace taoxml {
                 ;
         }
 
+        // 是否是空白文本
         inline bool _is_empty() {
             const char* p = _tk.c_str();
             while(*p == ' ' || *p == '\r' || *p == '\n' || *p == '\t')
@@ -593,6 +631,16 @@ int main() {
     tx.parse(xml);
     taoxml::text_node_t* span = taoxml::find_node_t(tx.root())["html"]["body"]["div"]["span"].to_text();
     dump_node_tree(tx.root()->select("").next()->to_node());
+
+    // 查找 html 节点
+    taoxml::node_node_t* html = taoxml::find_node_t(tx.root())["html"];
+    if(html) {
+        std::cout << html->tag() << std::endl;
+        taoxml::node_base_t* head = html->select("head").next();
+        if(head) {
+            std::cout << head->to_node()->tag() << std::endl;
+        }
+    }
 
     return 0;
 }
