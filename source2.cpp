@@ -1,8 +1,10 @@
 #include <iostream>
 #include <cctype>
+#include <cstring>
 
 namespace taoxml {
     static char xml[] = R"(
+<a>
 <html attr1 attr2>
     <head>
         <meta charset="UTF-8" />
@@ -20,9 +22,10 @@ namespace taoxml {
     enum class TK {
         error=0,tag,attr,assign,value,text,close,close1,close2,eof,next,
     };
+
     static char* p = nullptr;
 
-    static void _skip() {
+    static inline void _skip() {
         while(*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
             p++;
     }
@@ -36,7 +39,7 @@ namespace taoxml {
     static const char* tt;  // token text
     static char nc; // next char to be used, if not zero
 
-    static bool next() {
+    static void next() {
         if(nc) {
             *p = nc;
             nc = 0;
@@ -48,19 +51,19 @@ namespace taoxml {
                 if(*p == '/') {
                     p++;
                     tt = p;
-                    while(::isalpha(*p))
+                    while(::isalnum(*p))
                         p++;
                     if(*p == '>') {
                         *p = '\0';
                         p++;
                         sc = SC::init;
                         tk = TK::close2;
-                        return true;
+                        return;
                     }
                 }
                 else if(::isalpha(p[0])) {
                     tt = p;
-                    while(::isalpha(*p))
+                    while(::isalnum(*p))
                         p++;
                     if(*p != '\0') {
                         nc = *p;
@@ -68,19 +71,21 @@ namespace taoxml {
                     }
                     sc = SC::tag;
                     tk = TK::tag;
-                    return true;
+                    return;
                 }
             }
             else {
                 tt = p;
-                while(*p && *p != '<')
+                while(*p && *p != '<' && *p != '>')
                     p++;
                 if(*p != '\0') {
                     nc = *p;
                     *p = '\0';
                 }
-                tk = TK::text;
-                return true;
+                tk = *tt ? TK::text
+                    : *p ? TK::error
+                    : TK::eof;
+                return;
             }
         }
         else if(sc == SC::tag) {
@@ -94,12 +99,12 @@ namespace taoxml {
                     *p = '\0';
                 }
                 tk = TK::attr;
-                return true;
+                return;
             }
             else if(*p == '=') {
                 p++;
                 tk = TK::assign;
-                return true;
+                return;
             }
             else if(*p == '\'' || *p == '\"') {
                 const char c = *p++;
@@ -110,7 +115,7 @@ namespace taoxml {
                     *p = '\0';
                     p++;
                     tk = TK::value;
-                    return true;
+                    return;
                 }
             }
             else if(*p == '/') {
@@ -119,45 +124,50 @@ namespace taoxml {
                     p++;
                     sc = SC::init;
                     tk = TK::close1;
-                    return true;
+                    return;
                 }
             }
             else if(*p == '>') {
                 p++;
                 sc = SC::init;
                 tk = TK::close;
-                return true;
+                return;
             }
         }
 
         if(!*p) {
             tk = TK::eof;
-            return true;
+            return;
         }
 
         tk = TK::error;
-        return false;
+        return;
     }
 
     static void parse(char* xml) {
         p = xml;
-        while(next()) {
+        for(;;) {
+            next();
             if(tk == TK::tag) {
-                std::cout << tt << " ";
+                const char* tag_name = tt;
+                std::cout << tt;
                 next();
                 while(tk == TK::attr) {
-                    std::cout << tt;
+                    std::cout << " " << tt;
                     next();
                     if(tk == TK::assign) {
-                        std::cout << "=";
+                        std::cout << "=\"";
                         next();
                         if(tk == TK::value) {
-                            std::cout << tt;
+                            std::cout << tt << "\"";
                             next();
                             continue;
                         }
+
+                        throw "value expected after assignment.";
                     }
                 }
+
                 if(tk == TK::close) {
                     std::cout << "\n";
                     for(;;) {
@@ -165,27 +175,31 @@ namespace taoxml {
                         if(tk == TK::next)
                             continue;
 
-                        if(tk == TK::close2) {
+                        else if(tk == TK::close2) {
+                            if(::strncmp(tag_name, tt, ::strlen(tt)) != 0)
+                                throw "mismatched opening tag and closing tag.";
+
                             tk = TK::next;
                             std::cout << tt;
                             std::cout << "\n";
                             return;
                         }
+
+                        if(tk == TK::eof) throw "premature eof, expecting closing tag.";
+                        else throw "expecting closing tag.";
                     }
                 }
                 else if(tk == TK::close1) {
-                    std::cout << "\n";
-                    return;
-                }
-                else if(tk == TK::close2) {
-                    std::cout << "\n";
                     tk = TK::next;
+                    std::cout << "\n";
                     return;
                 }
+
+                throw "unexpected following token for open tag.";
             }
             else if(tk == TK::text) {
-                std::cout << tt;
-                std::cout << "\n";
+                tk = TK::next;
+                std::cout << "<!CDATA[" << tt << "]]\n";
                 return;
             }
             else if(tk == TK::close2) {
@@ -195,12 +209,17 @@ namespace taoxml {
                 return;
             }
 
-            return;
+            throw "unexpected token while calling parse.";
         }
     }
 }
 
 int main() {
-    taoxml::parse(taoxml::xml);
+    try {
+        taoxml::parse(taoxml::xml);
+    }
+    catch(const char* e) {
+        std::cout << "error: " << e << std::endl;
+    }
     return 0;
 }
