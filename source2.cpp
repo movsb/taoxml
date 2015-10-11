@@ -1,10 +1,9 @@
 #include <iostream>
-#include <string>
 #include <cctype>
 
 namespace taoxml {
     static char xml[] = R"(
-<html>
+<html attr1 attr2>
     <head>
         <meta charset="UTF-8" />
         <style type="text/css"></style>
@@ -88,11 +87,10 @@ namespace taoxml {
             _skip();
             if(::isalpha(*p)) {
                 tt = p;
-                while(::isalpha(*p))
+                while(::isalnum(*p))
                     p++;
-                if(*p == '=')
-                    nc = *p;
                 if(*p != '\0') {
+                    nc = *p;
                     *p = '\0';
                 }
                 tk = TK::attr;
