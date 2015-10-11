@@ -611,7 +611,7 @@ void dump_node_tree(taoxml::node_node_t* node) {
     std::cout << *node;
 }
 
-int main() {
+int main2() {
     const char* xml = R"(
 <html>
     <head>
